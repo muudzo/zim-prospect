@@ -1,24 +1,18 @@
-"""Outputs: GeoTIFFs, interactive map, success-rate curves and a markdown report."""
+"""File outputs: GeoTIFFs, zoom images, success-rate curves and the overview figure."""
 from __future__ import annotations
 
-import base64
-import io
 from pathlib import Path
 
-import folium
 import geopandas as gpd
 import matplotlib
 import numpy as np
-import pandas as pd
 import rasterio
-from rasterio.warp import Resampling, calculate_default_transform, reproject
 
 from .grid import Grid
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-WEB_MERCATOR = "EPSG:3857"
 CMAP = plt.get_cmap("inferno")
 
 
@@ -30,56 +24,22 @@ def write_geotiff(path: Path, arr: np.ndarray, grid: Grid) -> None:
         dst.write(arr.astype("float32"), 1)
 
 
-def _overlay_png(arr: np.ndarray, grid: Grid, min_visible: float = 0.6) -> tuple[str, list]:
-    """Reproject to Web Mercator and render a transparent PNG (data URI) + lat/lon bounds."""
-    bounds = rasterio.transform.array_bounds(grid.height, grid.width, grid.transform)
-    dst_tf, w, h = calculate_default_transform(grid.crs, WEB_MERCATOR, grid.width, grid.height,
-                                               *bounds, resolution=grid.res_m * 3)
-    out = np.full((h, w), np.nan, dtype="float32")
-    reproject(arr.astype("float32"), out, src_transform=grid.transform, src_crs=grid.crs,
-              src_nodata=np.nan, dst_transform=dst_tf, dst_crs=WEB_MERCATOR, dst_nodata=np.nan,
-              resampling=Resampling.bilinear)
-    rgba = CMAP(np.nan_to_num(out, nan=0.0))
-    alpha = np.clip((np.nan_to_num(out, nan=0.0) - min_visible) / (1 - min_visible), 0, 1)
-    rgba[..., 3] = np.where(np.isfinite(out), 0.15 + 0.75 * alpha, 0.0) * (out >= min_visible)
-    buf = io.BytesIO()
-    plt.imsave(buf, rgba, format="png")
-    west, north = dst_tf * (0, 0)
-    east, south = dst_tf * (w, h)
-    corners = gpd.GeoSeries(gpd.points_from_xy([west, east], [south, north]), crs=WEB_MERCATOR).to_crs(4326)
-    latlon = [[corners.y[0], corners.x[0]], [corners.y[1], corners.x[1]]]
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(), latlon
+def write_multiband(path: Path, layers: dict[str, np.ndarray], grid: Grid) -> None:
+    """One float32 band per layer, with the layer name as the band description."""
+    profile = {"driver": "GTiff", "height": grid.height, "width": grid.width, "count": len(layers),
+               "dtype": "float32", "crs": grid.crs, "transform": grid.transform,
+               "nodata": np.nan, "compress": "deflate", "tiled": True}
+    with rasterio.open(path, "w", **profile) as dst:
+        for i, (name, arr) in enumerate(layers.items(), start=1):
+            dst.write(arr.astype("float32"), i)
+            dst.set_band_description(i, name)
 
 
-def interactive_map(path: Path, maps: dict[str, np.ndarray], labels: dict[str, str], grid: Grid,
-                    occurrences: gpd.GeoDataFrame, targets: dict[str, pd.DataFrame]) -> None:
-    m = folium.Map(location=[-19.0, 29.8], zoom_start=7, tiles=None, control_scale=True)
-    folium.TileLayer("OpenStreetMap", name="Streets").add_to(m)
-    folium.TileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-                     attr="Esri World Imagery", name="Satellite").add_to(m)
-    for i, (key, arr) in enumerate(maps.items()):
-        uri, bounds = _overlay_png(arr, grid)
-        folium.raster_layers.ImageOverlay(uri, bounds=bounds, name=f"{labels[key]} — prospectivity",
-                                          show=(i == 0)).add_to(m)
-        tg = folium.FeatureGroup(name=f"{labels[key]} — top targets", show=(i == 0))
-        for row in targets.get(key, pd.DataFrame()).itertuples():
-            colour = "#1f9e89" if row.status == "greenfield" else "#3b528b"
-            folium.CircleMarker(
-                [row.peak_lat, row.peak_lon], radius=6 + min(row.area_km2, 200) ** 0.5 / 2,
-                color=colour, fill=True, fill_opacity=0.8,
-                popup=folium.Popup(f"<b>{labels[key]} target #{row.rank}</b><br>score {row.peak_score:.2f} · "
-                                   f"{row.area_km2:.0f} km²<br>{row.status} · nearest known "
-                                   f"{row.nearest_known_km:.1f} km<br>{row.peak_lat:.4f}, {row.peak_lon:.4f}",
-                                   max_width=260)).add_to(tg)
-        tg.add_to(m)
-    occ = folium.FeatureGroup(name="Known occurrences (MRDS + OSM)", show=True)
-    for row in occurrences.itertuples():
-        folium.CircleMarker([row.geometry.y, row.geometry.x], radius=3, color="#ffffff", weight=1,
-                            fill=True, fill_color="#222222", fill_opacity=0.9,
-                            tooltip=f"{row.name} — {row.commodities} ({row.source}, {row.status})").add_to(occ)
-    occ.add_to(m)
-    folium.LayerControl(collapsed=False).add_to(m)
-    m.save(str(path))
+def zoom_pngs(folder: Path, rgb: np.ndarray | None, score: np.ndarray) -> None:
+    """True-colour image and anomaly-strength image for one zoom box."""
+    if rgb is not None:
+        plt.imsave(folder / "rgb.png", rgb)
+    plt.imsave(folder / "score.png", np.nan_to_num(score, nan=0.0), cmap="RdBu_r", vmin=-3, vmax=3)
 
 
 def success_curves(path: Path, curves: dict[str, tuple[np.ndarray, np.ndarray, float]]) -> None:

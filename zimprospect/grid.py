@@ -7,7 +7,9 @@ from typing import Iterable
 import geopandas as gpd
 import numpy as np
 from affine import Affine
+from pyproj import Transformer
 from rasterio import features
+from rasterio.warp import transform_bounds
 from scipy import ndimage
 
 # Albers equal-area centred on Zimbabwe: areas (for success-rate curves) and
@@ -45,6 +47,26 @@ def make_grid(boundary: gpd.GeoDataFrame, res_m: float = 1000.0, pad_m: float = 
         out_shape=(height, width), transform=transform, fill=0, dtype="uint8",
     ).astype(bool)
     return Grid(ZIM_CRS, transform, width, height, float(res_m), mask)
+
+
+def local_grid(lat: float, lon: float, box_km: float, res_m: float) -> Grid:
+    """Square, fully unmasked grid of side `box_km` centred on (lat, lon), in ZIM_CRS."""
+    if box_km <= 0 or res_m <= 0:
+        raise ValueError("box_km and res_m must be positive")
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError(f"invalid coordinates: {lat}, {lon}")
+    x, y = Transformer.from_crs("EPSG:4326", ZIM_CRS, always_xy=True).transform(lon, lat)
+    n = max(int(round(box_km * 1000 / res_m)), 1)
+    half = n * res_m / 2
+    transform = Affine(res_m, 0, x - half, 0, -res_m, y + half)
+    return Grid(ZIM_CRS, transform, n, n, float(res_m), np.ones((n, n), dtype=bool))
+
+
+def lonlat_bounds(grid: Grid) -> tuple[float, float, float, float]:
+    """(west, south, east, north) of the grid in degrees."""
+    left, top = grid.transform * (0, 0)
+    right, bottom = grid.transform * (grid.width, grid.height)
+    return transform_bounds(grid.crs, "EPSG:4326", left, bottom, right, top)
 
 
 def rasterize_values(gdf: gpd.GeoDataFrame, values: Iterable[int], grid: Grid,

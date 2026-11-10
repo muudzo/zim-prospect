@@ -17,12 +17,23 @@
 # `weight` in (0, 1] softens a layer inside the gamma operator (1 = full influence).
 #
 # Layers: geo, dist_karoo_margin, elev, slope, rough,
-#         s2_ferric, s2_ferrous, s2_clay, s2_ndvi, s2_albedo
+#         s2_ferric, s2_ferrous, s2_clay, s2_ndvi, s2_albedo (+ _ctx5 / _ctx15),
+#         user_* layers from data/user/ (see config/user_data.example.yaml)
+# Mineral names in `match` (spodumene, sperrylite...) are for Mindat localities, which list minerals.
 
 gamma: 0.8
 min_training_points: 20
 spatial_block_km: 50
 background_ratio: 20
+
+# Sentinel-2 composite (see zimprospect/s2.py). These are the baseline settings. A three-season build
+# (2024-2026, per_tile: 6) cut the ferric tile-seam excess by 36-54% in testing; try it on the server:
+#   seasons: [[2024-07-15, 2024-10-15], [2025-07-15, 2025-10-15], [2026-07-15, 2026-10-15]]
+#   per_tile: 6
+sentinel2:
+  seasons: [["2025-07-15", "2025-10-15"]]
+  per_tile: 2
+  max_cloud: 5.0
 
 geo_presets:
   basement_hosted: &basement {basement: 1.0, cover: 0.08, karoo_lower: 0.03, karoo_upper: 0.03,
@@ -32,8 +43,26 @@ mafic_terrain: &mafic
   - {layer: s2_ferrous_ctx5, direction: high, weight: 0.7}
   - {layer: s2_albedo_ctx5, direction: low, weight: 0.6}
 
+# Target-zoom recipes (python -m zimprospect zoom): robust z-scores of 10-20 m Sentinel-2
+# indices inside each target box. Indices: ferric, ferrous, clay, ndvi, albedo, slope.
+# Coal and diamonds have no recipe: no useful surface signature at this scale.
+zoom_recipes:
+  alteration: &zoom_alteration
+    - {index: clay, direction: high, weight: 1.0}     # sericite / argillic alteration
+    - {index: ferric, direction: high, weight: 1.0}   # gossan, limonite after sulphides
+  ultramafic: &zoom_ultramafic
+    - {index: ferrous, direction: high, weight: 1.0}  # ferrous silicates in mafic soils
+    - {index: albedo, direction: low, weight: 0.8}    # dark serpentinite / pyroxenite soils
+  bif: &zoom_bif
+    - {index: ferric, direction: high, weight: 1.0}
+    - {index: slope, direction: high, weight: 0.8}    # resistant iron-formation ridges
+  pegmatite: &zoom_pegmatite                          # experimental
+    - {index: albedo, direction: high, weight: 1.0}   # pale quartz-feldspar
+    - {index: clay, direction: high, weight: 0.8}     # kaolinised feldspar
+
 commodities:
   gold:
+    zoom: *zoom_alteration
     label: Gold (orogenic, greenstone-hosted)
     match: [gold]
     evidence:
@@ -44,6 +73,7 @@ commodities:
       - {layer: rough, direction: high, weight: 0.3}
 
   chromite:
+    zoom: *zoom_ultramafic
     label: Chromite (Great Dyke + greenstone ultramafics)
     match: [chromium, chrome, chromite, ferrochrome]
     evidence:
@@ -53,24 +83,27 @@ commodities:
       - {layer: rough, direction: high, weight: 0.3}
 
   pgm:
+    zoom: *zoom_ultramafic
     label: Platinum-group metals (Great Dyke reefs)
-    match: [platinum, palladium, pge, pgm, rhodium]
+    match: [platinum, palladium, pge, pgm, rhodium, sperrylite, cooperite, braggite]
     evidence:
       - {layer: geo, weights: *basement}
       - *mafic
       - {layer: s2_ndvi, direction: low, weight: 0.3}
 
   nickel:
+    zoom: *zoom_ultramafic
     label: Nickel (komatiite-hosted sulphide)
-    match: [nickel]
+    match: [nickel, pentlandite, millerite]
     evidence:
       - {layer: geo, weights: *basement}
       - *mafic
       - {layer: s2_ferric, direction: high, weight: 0.4}   # gossans
 
   copper:
+    zoom: *zoom_alteration
     label: Copper (Magondi belt + greenstone)
-    match: [copper]
+    match: [copper, chalcopyrite, bornite, malachite, chalcocite]
     evidence:
       - {layer: geo, weights: *basement}
       - {layer: s2_ferric, direction: high, weight: 0.5}
@@ -78,6 +111,7 @@ commodities:
       - {layer: rough, direction: high, weight: 0.3}
 
   iron_ore:
+    zoom: *zoom_bif
     label: Iron ore (banded iron formation)
     match: [iron, magnetite, hematite]
     evidence:
@@ -87,8 +121,9 @@ commodities:
       - {layer: rough, direction: high, weight: 0.5}      # BIF forms ridges
 
   lithium:
+    zoom: *zoom_pegmatite
     label: Lithium (LCT pegmatites)
-    match: [lithium, petalite, spodumene, lepidolite]
+    match: [lithium, petalite, spodumene, lepidolite, amblygonite]
     evidence:
       - {layer: geo, weights: *basement}
       - {layer: s2_clay, direction: high, weight: 0.4}    # muscovite/lepidolite, weak
@@ -96,14 +131,16 @@ commodities:
       - *mafic                                             # pegmatites intrude greenstone margins
 
   tantalum_tin:
+    zoom: *zoom_pegmatite
     label: Tantalum / tin (rare-metal pegmatites)
-    match: [tin, tantalum, cassiterite, columbium, niobium, tantalite]
+    match: [tin, tantalum, cassiterite, columbium, niobium, tantalite, columbite, microlite, wodginite]
     evidence:
       - {layer: geo, weights: {basement: 1.0, karoo_lower: 0.05, cover: 0.08, others: 0.02}}
       - {layer: s2_clay, direction: high, weight: 0.4}
       - {layer: s2_albedo, direction: high, weight: 0.3}
 
   emerald:
+    zoom: *zoom_pegmatite
     label: Emerald (schist-hosted, greenstone margins)
     match: [emerald, beryl, beryllium]
     evidence:
