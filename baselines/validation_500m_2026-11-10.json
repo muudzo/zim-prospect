@@ -1,0 +1,255 @@
+{
+  "gold": {
+    "label": "Gold (orogenic, greenstone-hosted)",
+    "occurrences": 68,
+    "cells": 63,
+    "fuzzy": {
+      "n": 63,
+      "auc": 0.657,
+      "area_for_50pct": 0.331,
+      "area_for_80pct": 0.507,
+      "captured_in_top10pct": 0.159
+    },
+    "rf_cv": {
+      "n": 63,
+      "auc": 0.706,
+      "area_for_50pct": 0.237,
+      "area_for_80pct": 0.539,
+      "captured_in_top10pct": 0.302
+    },
+    "ensemble_cv": {
+      "n": 63,
+      "auc": 0.722,
+      "area_for_50pct": 0.223,
+      "area_for_80pct": 0.442,
+      "captured_in_top10pct": 0.254
+    },
+    "rf_top_features": {
+      "elev": 0.1205,
+      "s2_albedo_ctx15": 0.079,
+      "s2_albedo_ctx5": 0.064,
+      "geo_basement": 0.0608,
+      "s2_albedo": 0.0523,
+      "s2_ferric_ctx15": 0.0489
+    },
+    "method": "ensemble (fuzzy + random forest)"
+  },
+  "chromite": {
+    "label": "Chromite (Great Dyke + greenstone ultramafics)",
+    "occurrences": 62,
+    "cells": 56,
+    "fuzzy": {
+      "n": 56,
+      "auc": 0.829,
+      "area_for_50pct": 0.112,
+      "area_for_80pct": 0.253,
+      "captured_in_top10pct": 0.446
+    },
+    "rf_cv": {
+      "n": 56,
+      "auc": 0.824,
+      "area_for_50pct": 0.029,
+      "area_for_80pct": 0.352,
+      "captured_in_top10pct": 0.625
+    },
+    "ensemble_cv": {
+      "n": 56,
+      "auc": 0.859,
+      "area_for_50pct": 0.054,
+      "area_for_80pct": 0.255,
+      "captured_in_top10pct": 0.607
+    },
+    "rf_top_features": {
+      "elev": 0.2323,
+      "s2_albedo_ctx5": 0.0949,
+      "s2_albedo_ctx15": 0.0572,
+      "rough_ctx5": 0.0531,
+      "s2_ndvi": 0.0462,
+      "s2_clay_ctx5": 0.0456
+    },
+    "method": "ensemble (fuzzy + random forest)"
+  },
+  "pgm": {
+    "label": "Platinum-group metals (Great Dyke reefs)",
+    "occurrences": 21,
+    "cells": 20,
+    "fuzzy": {
+      "n": 20,
+      "auc": 0.586,
+      "area_for_50pct": 0.315,
+      "area_for_80pct": 0.548,
+      "captured_in_top10pct": 0.0
+    },
+    "rf_cv": {
+      "n": 20,
+      "auc": 0.765,
+      "area_for_50pct": 0.143,
+      "area_for_80pct": 0.29,
+      "captured_in_top10pct": 0.25
+    },
+    "ensemble_cv": {
+      "n": 20,
+      "auc": 0.737,
+      "area_for_50pct": 0.229,
+      "area_for_80pct": 0.447,
+      "captured_in_top10pct": 0.3
+    },
+    "rf_top_features": {
+      "elev": 0.1797,
+      "dist_karoo_margin": 0.0738,
+      "s2_albedo_ctx15": 0.0681,
+      "s2_clay": 0.0672,
+      "s2_ferrous_ctx5": 0.0591,
+      "s2_albedo_ctx5": 0.0525
+    },
+    "method": "ensemble (fuzzy + random forest)"
+  },
+  "nickel": {
+    "label": "Nickel (komatiite-hosted sulphide)",
+    "occurrences": 36,
+    "cells": 30,
+    "fuzzy": {
+      "n": 30,
+      "auc": 0.654,
+      "area_for_50pct": 0.273,
+      "area_for_80pct": 0.515,
+      "captured_in_top10pct": 0.1
+    },
+    "rf_cv": {
+      "n": 30,
+      "auc": 0.536,
+      "area_for_50pct": 0.465,
+      "area_for_80pct": 0.625,
+      "captured_in_top10pct": 0.033
+    },
+    "ensemble_cv": {
+      "n": 30,
+      "auc": 0.616,
+      "area_for_50pct": 0.34,
+      "area_for_80pct": 0.573,
+      "captured_in_top10pct": 0.1
+    },
+    "rf_top_features": {
+      "elev": 0.1255,
+      "s2_ndvi_ctx15": 0.0702,
+      "s2_albedo_ctx5": 0.0554,
+      "dist_karoo_margin": 0.0529,
+      "s2_albedo": 0.0517,
+      "s2_ferrous_ctx15": 0.0485
+    },
+    "method": "ensemble (fuzzy + random forest)"
+  },
+  "copper": {
+    "label": "Copper (Magondi belt + greenstone)",
+    "occurrences": 64,
+    "cells": 53,
+    "fuzzy": {
+      "n": 53,
+      "auc": 0.613,
+      "area_for_50pct": 0.329,
+      "area_for_80pct": 0.595,
+      "captured_in_top10pct": 0.075
+    },
+    "rf_cv": {
+      "n": 53,
+      "auc": 0.725,
+      "area_for_50pct": 0.197,
+      "area_for_80pct": 0.462,
+      "captured_in_top10pct": 0.302
+    },
+    "ensemble_cv": {
+      "n": 53,
+      "auc": 0.712,
+      "area_for_50pct": 0.218,
+      "area_for_80pct": 0.49,
+      "captured_in_top10pct": 0.132
+    },
+    "rf_top_features": {
+      "elev": 0.1029,
+      "dist_karoo_margin": 0.0806,
+      "s2_ndvi_ctx15": 0.0765,
+      "geo_basement": 0.0685,
+      "s2_albedo_ctx15": 0.0618,
+      "s2_albedo_ctx5": 0.0578
+    },
+    "method": "ensemble (fuzzy + random forest)"
+  },
+  "iron_ore": {
+    "label": "Iron ore (banded iron formation)",
+    "occurrences": 11,
+    "cells": 10,
+    "fuzzy": {
+      "n": 10,
+      "auc": 0.6,
+      "area_for_50pct": 0.417,
+      "area_for_80pct": 0.625,
+      "captured_in_top10pct": 0.1
+    },
+    "method": "fuzzy only (too few training points)"
+  },
+  "lithium": {
+    "label": "Lithium (LCT pegmatites)",
+    "occurrences": 33,
+    "cells": 14,
+    "fuzzy": {
+      "n": 14,
+      "auc": 0.594,
+      "area_for_50pct": 0.4,
+      "area_for_80pct": 0.566,
+      "captured_in_top10pct": 0.0
+    },
+    "method": "fuzzy only (too few training points)"
+  },
+  "tantalum_tin": {
+    "label": "Tantalum / tin (rare-metal pegmatites)",
+    "occurrences": 33,
+    "cells": 14,
+    "fuzzy": {
+      "n": 14,
+      "auc": 0.69,
+      "area_for_50pct": 0.253,
+      "area_for_80pct": 0.515,
+      "captured_in_top10pct": 0.143
+    },
+    "method": "fuzzy only (too few training points)"
+  },
+  "emerald": {
+    "label": "Emerald (schist-hosted, greenstone margins)",
+    "occurrences": 35,
+    "cells": 18,
+    "fuzzy": {
+      "n": 18,
+      "auc": 0.679,
+      "area_for_50pct": 0.304,
+      "area_for_80pct": 0.504,
+      "captured_in_top10pct": 0.222
+    },
+    "method": "fuzzy only (too few training points)"
+  },
+  "coal": {
+    "label": "Coal (Lower Karoo basins)",
+    "occurrences": 15,
+    "cells": 15,
+    "fuzzy": {
+      "n": 15,
+      "auc": 0.919,
+      "area_for_50pct": 0.018,
+      "area_for_80pct": 0.021,
+      "captured_in_top10pct": 0.867
+    },
+    "method": "fuzzy only (too few training points)"
+  },
+  "diamonds": {
+    "label": "Diamonds (kimberlite + Marange-type conglomerates)",
+    "occurrences": 5,
+    "cells": 5,
+    "fuzzy": {
+      "n": 5,
+      "auc": 0.721,
+      "area_for_50pct": 0.301,
+      "area_for_80pct": 0.379,
+      "captured_in_top10pct": 0.2
+    },
+    "method": "fuzzy only (too few training points)"
+  }
+}

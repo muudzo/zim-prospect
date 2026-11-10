@@ -1,0 +1,14 @@
+numpy
+pandas
+geopandas
+shapely
+pyogrio
+pyproj
+rasterio
+scipy
+scikit-learn
+folium
+matplotlib
+requests
+pyyaml
+pytest

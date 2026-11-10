@@ -1,0 +1,128 @@
+# Prospectivity model configuration for Zimbabwe.
+#
+# Two models run per commodity:
+#  1. Knowledge-driven fuzzy model (always): expert weights below, fuzzy gamma combination.
+#  2. Data-driven random forest (only if >= min_training_points declustered occurrences),
+#     validated with spatial block cross-validation. Final map = mean rank of both.
+#
+# Open national geology for Zimbabwe is AGE-ONLY (USGS Africa map): it separates Karoo
+# basins and Kalahari cover from Precambrian basement but NOT greenstone from granite.
+# Greenstone/mafic terrain is therefore approximated with Sentinel-2 dry-season soil
+# signatures (dark, ferrous-rich red soils over mafic rocks vs pale granite sandveld).
+#
+# Evidence entry types:
+#   {layer: geo, weights: {class: w}}                 geology class membership
+#   {layer: <name>, direction: high|low, weight: w}   continuous layer, percentile-rescaled 0-1
+#   {layer: <dist layer>, d0, d1, floor}              distance decay (km)
+# `weight` in (0, 1] softens a layer inside the gamma operator (1 = full influence).
+#
+# Layers: geo, dist_karoo_margin, elev, slope, rough,
+#         s2_ferric, s2_ferrous, s2_clay, s2_ndvi, s2_albedo
+
+gamma: 0.8
+min_training_points: 20
+spatial_block_km: 50
+background_ratio: 20
+
+geo_presets:
+  basement_hosted: &basement {basement: 1.0, cover: 0.08, karoo_lower: 0.03, karoo_upper: 0.03,
+                              karoo_volcanic: 0.02, water: 0.0}
+
+mafic_terrain: &mafic
+  - {layer: s2_ferrous_ctx5, direction: high, weight: 0.7}
+  - {layer: s2_albedo_ctx5, direction: low, weight: 0.6}
+
+commodities:
+  gold:
+    label: Gold (orogenic, greenstone-hosted)
+    match: [gold]
+    evidence:
+      - {layer: geo, weights: *basement}
+      - *mafic
+      - {layer: s2_ferric, direction: high, weight: 0.4}
+      - {layer: s2_clay, direction: high, weight: 0.3}
+      - {layer: rough, direction: high, weight: 0.3}
+
+  chromite:
+    label: Chromite (Great Dyke + greenstone ultramafics)
+    match: [chromium, chrome, chromite, ferrochrome]
+    evidence:
+      - {layer: geo, weights: *basement}
+      - *mafic
+      - {layer: s2_ndvi, direction: low, weight: 0.3}   # serpentine soils carry sparse vegetation
+      - {layer: rough, direction: high, weight: 0.3}
+
+  pgm:
+    label: Platinum-group metals (Great Dyke reefs)
+    match: [platinum, palladium, pge, pgm, rhodium]
+    evidence:
+      - {layer: geo, weights: *basement}
+      - *mafic
+      - {layer: s2_ndvi, direction: low, weight: 0.3}
+
+  nickel:
+    label: Nickel (komatiite-hosted sulphide)
+    match: [nickel]
+    evidence:
+      - {layer: geo, weights: *basement}
+      - *mafic
+      - {layer: s2_ferric, direction: high, weight: 0.4}   # gossans
+
+  copper:
+    label: Copper (Magondi belt + greenstone)
+    match: [copper]
+    evidence:
+      - {layer: geo, weights: *basement}
+      - {layer: s2_ferric, direction: high, weight: 0.5}
+      - {layer: s2_clay, direction: high, weight: 0.4}
+      - {layer: rough, direction: high, weight: 0.3}
+
+  iron_ore:
+    label: Iron ore (banded iron formation)
+    match: [iron, magnetite, hematite]
+    evidence:
+      - {layer: geo, weights: *basement}
+      - {layer: s2_ferric, direction: high, weight: 0.9}
+      - {layer: s2_ferrous, direction: high, weight: 0.6}
+      - {layer: rough, direction: high, weight: 0.5}      # BIF forms ridges
+
+  lithium:
+    label: Lithium (LCT pegmatites)
+    match: [lithium, petalite, spodumene, lepidolite]
+    evidence:
+      - {layer: geo, weights: *basement}
+      - {layer: s2_clay, direction: high, weight: 0.4}    # muscovite/lepidolite, weak
+      - {layer: s2_albedo, direction: high, weight: 0.3}  # pale pegmatite/granite margins
+      - *mafic                                             # pegmatites intrude greenstone margins
+
+  tantalum_tin:
+    label: Tantalum / tin (rare-metal pegmatites)
+    match: [tin, tantalum, cassiterite, columbium, niobium, tantalite]
+    evidence:
+      - {layer: geo, weights: {basement: 1.0, karoo_lower: 0.05, cover: 0.08, others: 0.02}}
+      - {layer: s2_clay, direction: high, weight: 0.4}
+      - {layer: s2_albedo, direction: high, weight: 0.3}
+
+  emerald:
+    label: Emerald (schist-hosted, greenstone margins)
+    match: [emerald, beryl, beryllium]
+    evidence:
+      - {layer: geo, weights: *basement}
+      - *mafic
+      - {layer: s2_clay, direction: high, weight: 0.3}
+
+  coal:
+    label: Coal (Lower Karoo basins)
+    match: [coal]
+    evidence:
+      - {layer: geo, weights: {karoo_lower: 1.0, karoo_upper: 0.35, cover: 0.2,
+                               karoo_volcanic: 0.05, basement: 0.01, water: 0.0}}
+      - {layer: dist_karoo_margin, d0: 5, d1: 40, floor: 0.4}
+
+  diamonds:
+    label: Diamonds (kimberlite + Marange-type conglomerates)
+    match: [diamond, diamonds, kimberlite]
+    evidence:
+      - {layer: geo, weights: {basement: 0.6, karoo_lower: 0.5, karoo_upper: 0.4, cover: 0.3,
+                               karoo_volcanic: 0.2, water: 0.0}}
+      - {layer: rough, direction: low, weight: 0.2}       # alluvial/plateau settings
