@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 from scipy.stats import rankdata
@@ -12,6 +12,7 @@ from sklearn.ensemble import RandomForestClassifier
 from . import sources
 from .features import FeatureStack
 from .fuzzy import class_lookup, fuzzy_gamma, linear_decay, rescale_percentile
+from .userdata import LITH_LAYER, PREFIX as USER_PREFIX
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +22,12 @@ CONTINUOUS = (["dist_karoo_margin", "elev", "slope", "rough",
                "s2_ferric", "s2_ferrous", "s2_clay", "s2_ndvi", "s2_albedo"]
               + [f"{n}_ctx{km}" for n in CONTEXT_LAYERS for km in CONTEXT_KM])
 RNG_SEED = 42
+GEO_CLASS_LAYER = "geo_class"
+# User layers that hold class codes; they are one-hot encoded even without a class list.
+USER_CLASS_LAYERS = frozenset({LITH_LAYER})
+EMPTY_FEATURE_FILL = 0.0   # an all-NaN user layer carries no information but must not break the RF
+
+ClassNames = Mapping[str, Sequence[str]]
 
 
 @dataclass(frozen=True)
@@ -40,8 +47,30 @@ def _flatten(entries: list[Any]) -> list[dict]:
     return out
 
 
-def evidence_layer(entry: dict, stack: FeatureStack) -> np.ndarray:
-    """Turn one config evidence entry into a 0-1 membership raster."""
+def _all_class_names(class_names: ClassNames | None) -> dict[str, Sequence[str]]:
+    return {GEO_CLASS_LAYER: sources.GEOLOGY_CLASSES, **(class_names or {})}
+
+
+def _class_membership(name: str, data: np.ndarray, weights: Mapping[str, float],
+                      class_names: ClassNames | None) -> np.ndarray:
+    names = _all_class_names(class_names).get(name)
+    if names is None:
+        raise KeyError(f"layer '{name}' has class weights but no class list; pass class_names "
+                       "(e.g. userdata.class_names(cfg)) to evidence_layer / fuzzy_model")
+    codes = np.nan_to_num(data, nan=-1).astype(int)
+    top = int(codes.max(initial=-1))
+    if top >= len(names):
+        raise ValueError(f"layer '{name}' holds class code {top} but only {len(names)} class names are known")
+    return class_lookup(codes, list(names), weights)
+
+
+def evidence_layer(entry: dict, stack: FeatureStack,
+                   class_names: ClassNames | None = None) -> np.ndarray:
+    """Turn one config evidence entry into a 0-1 membership raster.
+
+    `{layer: <class layer>, weights: {...}}` works for `geo` (alias of geo_class) and for any
+    layer listed in `class_names` ({layer: [class name per code]}).
+    """
     name = entry["layer"]
     if name == "geo":
         classes = np.nan_to_num(stack.layers["geo_class"], nan=-1).astype(int)
@@ -49,6 +78,8 @@ def evidence_layer(entry: dict, stack: FeatureStack) -> np.ndarray:
     if name not in stack.layers:
         raise KeyError(f"unknown evidence layer '{name}'")
     data = stack.layers[name]
+    if "weights" in entry:
+        return _class_membership(name, data, entry["weights"], class_names)
     if "d0" in entry:
         return linear_decay(data, entry["d0"], entry["d1"], entry["floor"])
     direction = entry.get("direction", "high")
@@ -58,9 +89,19 @@ def evidence_layer(entry: dict, stack: FeatureStack) -> np.ndarray:
     return scaled if direction == "high" else 1.0 - scaled
 
 
-def fuzzy_model(spec: dict, stack: FeatureStack, gamma: float) -> np.ndarray:
-    entries = _flatten(spec["evidence"])
-    layers = [evidence_layer(e, stack) for e in entries]
+def _available(entry: dict, stack: FeatureStack) -> bool:
+    """False for an `optional: true` entry whose layer is not in the stack (e.g. no user data)."""
+    name = entry["layer"]
+    if entry.get("optional") and name != "geo" and name not in stack.layers:
+        log.info("optional evidence layer '%s' is not in the stack; skipped", name)
+        return False
+    return True
+
+
+def fuzzy_model(spec: dict, stack: FeatureStack, gamma: float,
+                class_names: ClassNames | None = None) -> np.ndarray:
+    entries = [e for e in _flatten(spec["evidence"]) if _available(e, stack)]
+    layers = [evidence_layer(e, stack, class_names) for e in entries]
     weights = [float(e.get("weight", 1.0)) for e in entries]
     score = fuzzy_gamma(layers, gamma=gamma, weights=weights)
     return np.where(stack.grid.mask, score, np.nan)
@@ -68,18 +109,48 @@ def fuzzy_model(spec: dict, stack: FeatureStack, gamma: float) -> np.ndarray:
 
 # ---------- data-driven ----------
 
-def feature_matrix(stack: FeatureStack) -> tuple[np.ndarray, list[str]]:
-    """(n_cells_in_mask, n_features) matrix: continuous layers + one-hot geology."""
+def _class_layers(stack: FeatureStack, class_names: ClassNames | None) -> list[tuple[str, list[str]]]:
+    """(layer, class names) to one-hot encode: geo_class first, then user class layers."""
+    known = _all_class_names(class_names)
+    user = sorted(n for n in stack.layers if n.startswith(USER_PREFIX)
+                  and (n in known or n in USER_CLASS_LAYERS))
+    out = [(GEO_CLASS_LAYER, list(sources.GEOLOGY_CLASSES))]
+    for name in user:
+        if name in known:
+            out.append((name, list(known[name])))
+            continue
+        codes = stack.layers[name][stack.grid.mask]
+        top = int(np.nanmax(codes)) if np.isfinite(codes).any() else -1
+        out.append((name, [str(i) for i in range(top + 1)]))
+    return out
+
+
+def _user_continuous(stack: FeatureStack, class_layers: list[tuple[str, list[str]]]) -> list[str]:
+    categorical = {name for name, _ in class_layers}
+    return sorted(n for n in stack.layers if n.startswith(USER_PREFIX) and n not in categorical)
+
+
+def feature_matrix(stack: FeatureStack,
+                   class_names: ClassNames | None = None) -> tuple[np.ndarray, list[str]]:
+    """(n_cells_in_mask, n_features) matrix.
+
+    Columns: CONTINUOUS, then every continuous `user_*` layer in the stack (sorted), then one-hot
+    geology, then one-hot user class layers. With no user layers this is the original layout.
+    """
     mask = stack.grid.mask
+    class_layers = _class_layers(stack, class_names)
     cols, names = [], []
-    for name in CONTINUOUS:
+    for name in CONTINUOUS + _user_continuous(stack, class_layers):
         v = stack.layers[name][mask]
-        cols.append(np.where(np.isfinite(v), v, np.nanmedian(v)))
+        fill = np.nanmedian(v) if np.isfinite(v).any() else EMPTY_FEATURE_FILL
+        cols.append(np.where(np.isfinite(v), v, fill))
         names.append(name)
-    geo = stack.layers["geo_class"][mask]
-    for i, cls in enumerate(sources.GEOLOGY_CLASSES):
-        cols.append((geo == i).astype("float32"))
-        names.append(f"geo_{cls}")
+    for layer, classes in class_layers:
+        codes = stack.layers[layer][mask]
+        prefix = "geo" if layer == GEO_CLASS_LAYER else layer
+        for i, cls in enumerate(classes):
+            cols.append((codes == i).astype("float32"))
+            names.append(f"{prefix}_{cls}")
     return np.column_stack(cols).astype("float32"), names
 
 
@@ -90,9 +161,13 @@ def _block_ids(stack: FeatureStack, block_km: float) -> np.ndarray:
 
 
 def random_forest(stack: FeatureStack, pos_rows: np.ndarray, pos_cols: np.ndarray,
-                  block_km: float = 50, background_ratio: int = 20, folds: int = 5) -> RFResult:
-    """Presence/background random forest with spatial-block cross-validation."""
-    X, names = feature_matrix(stack)
+                  block_km: float = 50, background_ratio: int = 20, folds: int = 5, *,
+                  class_names: ClassNames | None = None) -> RFResult:
+    """Presence/background random forest with spatial-block cross-validation.
+
+    Features come from `feature_matrix(stack, class_names)`, so user layers join automatically.
+    """
+    X, names = feature_matrix(stack, class_names)
     mask = stack.grid.mask
     flat_index = np.full(mask.shape, -1, dtype=np.int64)
     flat_index[mask] = np.arange(mask.sum())

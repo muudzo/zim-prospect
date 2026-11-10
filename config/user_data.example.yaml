@@ -1,0 +1,52 @@
+# User-supplied data (optional). Copy to config/user_data.yaml and edit.
+#
+# The data files themselves go in the user data folder, `data/user/` by default
+# (`$ZIMPROSPECT_DATA_DIR/user/` when that variable is set). Never commit that folder.
+# Every block and every key is optional; relative paths are resolved inside the user folder.
+# With no files present the pipeline output is exactly the same as without this feature.
+#
+#   data/user/geology.gpkg (or .shp)   polygons            -> layers user_lith,
+#                                                              user_dist_greenstone_contact (km)
+#   data/user/faults.gpkg  (or .shp)   lines               -> layer user_dist_fault (km)
+#   data/user/rasters/*.tif            continuous grids    -> layer user_<file stem>
+#                                      (e.g. aeromagnetic TMI, radiometric K/Th/U)
+#   data/user/occurrences.csv          name,lat,lon,commodities[,source]
+#
+# Using the layers in config/commodities.yaml:
+#   {layer: user_lith, weights: {greenstone_mafic: 1.0, granite_gneiss: 0.1, others: 0.05}}
+#   {layer: user_dist_greenstone_contact, d0: 1, d1: 10, floor: 0.2}
+#   {layer: user_dist_fault, d0: 0.5, d1: 5, floor: 0.3}
+#   {layer: user_mag_tmi, direction: high, weight: 0.5, optional: true}
+# `optional: true` skips an entry when its layer is not in the stack (no user data yet).
+# Every user_* raster is also added to the random forest automatically; user_lith is
+# one-hot encoded there.
+
+user_geology:
+  path: geology.gpkg            # default: geology.gpkg, else geology.shp
+  layer: null                   # layer name inside a multi-layer GeoPackage
+  column: UNIT_NAME             # attribute holding the map unit (default: lith)
+  # Map unit -> lith class. Units not listed are left as no-data and logged.
+  # Built-in classes (stable codes, in this order): greenstone_mafic, greenstone_ultramafic,
+  # greenstone_felsic, bif, granite_gneiss, great_dyke. Any other lowercase name adds a class.
+  # The greenstone-granite contact layer uses every greenstone_* class against granite_gneiss.
+  # Omit `classes` when `column` already holds the built-in class names listed above.
+  classes:
+    Bulawayan basalt: greenstone_mafic
+    Bulawayan komatiite: greenstone_ultramafic
+    Shamvaian sediments: greenstone_felsic
+    Banded iron formation: bif
+    Chilimanzi granite: granite_gneiss
+    Sesombi tonalite: granite_gneiss
+    Great Dyke: great_dyke
+    Karoo sandstone: karoo_sediment
+
+user_faults:
+  path: faults.gpkg             # default: faults.gpkg, else faults.shp
+  layer: null
+
+user_rasters:
+  dir: rasters                  # every *.tif / *.tiff here becomes user_<stem>
+  resampling: bilinear          # nearest | bilinear | cubic | average
+
+user_occurrences:
+  path: occurrences.csv         # commodities separated by ';', e.g. "gold; silver"
