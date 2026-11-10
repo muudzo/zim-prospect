@@ -15,6 +15,34 @@ Section 6 lists the dead ends that have already been checked. Do not research th
 
 ---
 
+## Status (2026-11-10)
+
+Upgrades U1–U7 were implemented in this repository on 2026-11-10 (see `git log`). On the server:
+
+1. **Bring it up** (Section 1) and confirm that `pytest -q` passes.
+2. **Rerun the pipeline** and compare the result with the baseline using `scripts/compare_validation.py`.
+   The final maps are now re-ranked to true percentiles, which leaves AUCs unchanged.
+3. **Run what this Mac could not:**
+   - `zoom` for the top 10 targets of each commodity
+   - `run --res 250` (30 m DEM)
+   - the three-season Sentinel-2 build (`S2Settings`)
+   - `tune`
+
+   Report the score changes to the user.
+4. **Next model work,** from the independent review in `docs/research/method-validation.md`:
+   - Add the GeoNames mine gazetteer (CC BY, about 670 mines) as training data and as a target-group background. Once
+     it is used for training, it can no longer serve as the holdout set.
+   - Make terrain roughness conditional on lithology, because it pulls targets onto escarpments.
+   - Add a Great Dyke / greenstone layer as soon as the user supplies ZGS geology.
+   - Validate with leave-one-belt-out cross-validation.
+5. **Check the open aeromagnetics lead.** The use-case research found 1980s Zimbabwe aeromagnetic surveys listed
+   by Natural Resources Canada under an open licence. Confirm that the grids can be downloaded before relying
+   on them; if they can, they go in `data/user/rasters/`.
+6. **Product next steps,** from `docs/research/use-case-validation.md`:
+   - a licence and exclusion overlay (parks, rivers, towns, claim polygons)
+   - a one-page due-diligence report for a claim polygon
+   - a GPX/KML export of targets and anomalies for field work
+
 ## 0. Working rules
 
 - **Python 3.12.** It is the tested version; use 3.11–3.13 at most. Newer versions lacked

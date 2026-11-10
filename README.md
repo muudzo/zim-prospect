@@ -15,6 +15,10 @@ cd ~/zim-prospect
 .venv/bin/python -m zimprospect run                      # about 3 min with cached data, about 10 min on first run
 .venv/bin/python -m zimprospect run --only gold,lithium  # a subset of commodities
 .venv/bin/python -m zimprospect run --res 250            # finer grid (slower; rebuilds features)
+                                                         #   (below 200 m it uses the 30 m Copernicus DEM)
+.venv/bin/python -m zimprospect zoom --commodity gold --top 5   # 10-20 m anomalies inside the top targets
+.venv/bin/python -m zimprospect tune                     # tune fuzzy weights -> config/commodities.tuned.yaml
+.venv/bin/python -m zimprospect run --config config/commodities.tuned.yaml
 .venv/bin/python -m pytest -q                            # tests
 ```
 
@@ -31,6 +35,27 @@ COG overviews instead of full scenes, so nothing large is stored on disk.
 | `maps/<commodity>_fuzzy.tif`, `_rf.tif` | The two component models, kept separately |
 | `validation.json`, `success_curves.png` | Accuracy against known deposits |
 | `overview.png` | Small multiples of all commodities |
+| `zoom/<commodity>/zoom_map.html` | Target zoom: 10–20 m surface anomalies (alteration, iron oxide, mafic soils, ridges) inside each target, ranked, with copyable coordinates. **These are places to sample, not deposits.** |
+| `zoom/<commodity>/tNN/` | Per target: `indices.tif` (all indices), `score.tif`, `rgb.png`, `score.png`, `anomalies.csv` |
+| `tuning_report.json` | Prior and tuned fuzzy weights, both scored on held-out spatial folds (from `tune`) |
+
+**The interactive map.** Pick one mineral at a time. The panel shows how well that map ranked known deposits
+(a confidence badge), a legend, and the ranked targets: tap one to fly to it, copy its coordinates or get
+directions. On a phone the panel is a bottom sheet you can drag. The selected mineral is kept in the URL (`#gold`).
+
+## Adding your own data
+
+Everything under `data/user/` is optional and never committed. See `config/user_data.example.yaml`.
+
+| Drop in | Becomes |
+|---|---|
+| `data/user/occurrences.csv` (`name, lat, lon, commodities` separated by `;`) | Extra training and validation points (rows are validated; rejects are logged) |
+| `data/user/geology.gpkg` + `config/user_data.yaml` mapping units to lith classes | `user_lith` classes and `user_dist_greenstone_contact`, usable as `{layer: user_lith, weights: {...}}` |
+| `data/user/faults.gpkg` | `user_dist_fault` |
+| `data/user/rasters/<name>.tif` (for example aeromagnetics) | Layer `user_<name>`, added to the random forest automatically |
+| `MINDAT_API_KEY` environment variable | Mindat localities merged into the known occurrences (check Mindat's terms of use) |
+
+`ZIMPROSPECT_DATA_DIR` and `ZIMPROSPECT_OUT_DIR` move the data and output folders, for example onto a server's data disk.
 
 ## How it works
 
@@ -74,6 +99,11 @@ AUC is the probability that a known deposit scores higher than a random cell; 0.
 | Iron ore | fuzzy | 10 | 0.60 | 63% | 10% | Weak |
 | Lithium | fuzzy | 14 | 0.59 | 57% | 0% | Weak |
 
+**Independent holdout** ([docs/research/method-validation.md](docs/research/method-validation.md)): 45 mines
+and goldfields named in the literature, none of them from the training databases. Gold, chromite and PGM maps put
+96%, 90% and 80% of them in their top 10% of Zimbabwe, against 23–29% for random points. The belts are right;
+the *ranking of individual targets* is weaker, because terrain roughness pulls targets onto escarpments.
+
 ## Limitations
 
 1. **No open lithology map separates greenstone from granite.** Every open national geology map of
@@ -101,20 +131,31 @@ AUC is the probability that a known deposit scores higher than a random cell; 0.
 4. **Run a target-scale Sentinel-2 or ASTER alteration analysis** at 10–20 m over the top targets.
 5. Tune the fuzzy weights against `validation.json`. The current weights are expert priors.
 
+Architecture and design decisions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Server deployment and upgrade notes: [docs/CODEX_HANDOFF.md](docs/CODEX_HANDOFF.md).
+Who this is for: [docs/research/use-case-validation.md](docs/research/use-case-validation.md).
+
 ## Project layout
 
 ```
 zimprospect/
-  sources.py      open-data downloads (cached)        grid.py      projection, rasterising, distances
-  features.py     evidence-layer stack + Sentinel-2    occurrences.py  MRDS + OSM points
-  fuzzy.py        fuzzy membership + gamma operator    models.py    fuzzy, random forest, ensemble
-  validate.py     success-rate curve, AUC              targets.py   ranked target zones
-  report.py       GeoTIFF, interactive map, figures    cli.py       pipeline entry point
-config/commodities.yaml   per-commodity weights and settings
+  sources.py      open-data downloads (cached)          grid.py        projection, rasterising, distances
+  features.py     evidence-layer stack + terrain         s2.py          Sentinel-2 settings, seasons, seam metric
+  occurrences.py  MRDS + OSM + user + Mindat points      userdata.py    optional user geology/faults/rasters
+  mindat.py       Mindat localities (MINDAT_API_KEY)     fuzzy.py       fuzzy membership + gamma operator
+  models.py       fuzzy, random forest, ensemble         validate.py    success-rate curve, AUC
+  targets.py      ranked target zones                    tuning.py      fuzzy weight tuning (spatial CV)
+  zoom.py         10-20 m target zoom                    report.py      GeoTIFF, PNG figures
+  webmap.py       interactive HTML maps (+ web/)         cli.py         run / zoom / tune
+config/commodities.yaml        per-commodity weights, zoom recipes and settings
+config/user_data.example.yaml  how to plug in your own geology, faults, rasters and mine lists
+scripts/compare_validation.py  regression check against baselines/
+docs/                          architecture, Codex server handoff, research
 ```
 
 ## Data attribution
 
 USGS (MRDS; Persits et al. 1997 OFR 97-470A), public domain. OpenStreetMap contributors (ODbL).
-geoBoundaries (CC BY 3.0 IGO). Copernicus DEM GLO-90 © DLR/ESA/Airbus, produced using Copernicus
-data. Contains modified Copernicus Sentinel-2 data (2025), accessed through Element84 Earth Search.
+geoBoundaries (CC BY 3.0 IGO). Copernicus DEM GLO-90 and GLO-30 © DLR e.V. 2010-2014 and © Airbus Defence and
+Space GmbH 2014-2018, provided under COPERNICUS by the European Union and ESA. Mindat data (optional) is
+CC BY-NC-SA: non-commercial use only. Contains modified Copernicus Sentinel-2 data (2025), accessed through Element84 Earth Search.
