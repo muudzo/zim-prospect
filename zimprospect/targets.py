@@ -8,13 +8,28 @@ from scipy import ndimage
 from .grid import Grid, cell_centres_lonlat, distance_km
 
 GREENFIELD_KM = 5.0  # zones farther than this from any known occurrence are "greenfield"
+MIN_TARGET_AREA_KM2 = 0.5  # = 2 cells at 500 m, 8 at 250 m: the same physical size at any resolution
+_AREA_ROUNDING = 9  # decimals kept before rounding up, so 0.5 / 0.25 is 2 cells, not 3
+
+
+def min_cells_for_area(min_area_km2: float, res_m: float) -> int:
+    """Smallest number of `res_m` cells whose area reaches `min_area_km2` (at least 1)."""
+    if res_m <= 0 or min_area_km2 < 0:
+        raise ValueError("res_m must be positive and min_area_km2 non-negative")
+    cell_km2 = (res_m / 1000) ** 2
+    return max(1, int(np.ceil(round(min_area_km2 / cell_km2, _AREA_ROUNDING))))
 
 
 def extract_targets(score: np.ndarray, grid: Grid, known_rows: np.ndarray, known_cols: np.ndarray,
-                    top_frac: float = 0.03, max_targets: int = 25, min_cells: int = 2) -> pd.DataFrame:
-    """Connected zones within the top `top_frac` of the study area, ranked by peak then size."""
+                    top_frac: float = 0.03, max_targets: int = 25,
+                    min_area_km2: float = MIN_TARGET_AREA_KM2) -> pd.DataFrame:
+    """Connected zones within the top `top_frac` of the study area, ranked by peak then size.
+
+    Zones smaller than `min_area_km2` are dropped (converted to cells with `grid.res_m`).
+    """
     if not 0 < top_frac < 1:
         raise ValueError("top_frac must be between 0 and 1")
+    min_cells = min_cells_for_area(min_area_km2, grid.res_m)
     valid = np.isfinite(score) & grid.mask
     threshold = np.percentile(score[valid], 100 * (1 - top_frac))
     hot = valid & (score >= threshold)
@@ -42,7 +57,10 @@ def extract_targets(score: np.ndarray, grid: Grid, known_rows: np.ndarray, known
         "nearest_known_km": np.round(min_dist, 1),
     })
     df["status"] = np.where(df["nearest_known_km"] <= GREENFIELD_KM, "known district", "greenfield")
-    df = df[sizes >= min_cells].sort_values(["peak_score", "area_km2"], ascending=False)
+    # Sort on the unrounded peak: near the top of a percentile map many peaks round to 1.0.
+    order = np.lexsort((-df["area_km2"].to_numpy(), -peaks))
+    df = df.iloc[order]
+    df = df[(sizes >= min_cells)[order]]
     df = df.head(max_targets).reset_index(drop=True)
     df.insert(0, "rank", np.arange(1, len(df) + 1))
     return df

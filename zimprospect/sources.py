@@ -5,7 +5,7 @@ Verified sources (Nov 2026):
 - Geology: USGS OFR 97-470A Africa geology, age units only (public domain)
 - Occurrences: USGS MRDS (public domain) + OpenStreetMap mines/quarries (ODbL)
 - (No open magnetics: EMAG2v3 has a data gap over Zimbabwe.)
-- DEM: Copernicus GLO-90 COGs on AWS (free, attribution required)
+- DEM: Copernicus GLO-90 / GLO-30 COGs on AWS (free, attribution required)
 - Imagery: Sentinel-2 L2A COGs via Element84 Earth Search STAC (open)
 """
 from __future__ import annotations
@@ -13,9 +13,12 @@ from __future__ import annotations
 import io
 import json
 import logging
+import math
+import os
 import re
 import zipfile
 from pathlib import Path
+from typing import Iterable, Sequence
 
 import geopandas as gpd
 import pandas as pd
@@ -23,7 +26,18 @@ import requests
 
 log = logging.getLogger(__name__)
 
-RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR_ENV = "ZIMPROSPECT_DATA_DIR"
+
+
+def data_dir() -> Path:
+    """Data root: $ZIMPROSPECT_DATA_DIR if set, else <project>/data (holds raw/ and cache/)."""
+    value = os.environ.get(DATA_DIR_ENV, "").strip()
+    return Path(value).expanduser().resolve() if value else PROJECT_ROOT / "data"
+
+
+DATA_DIR = data_dir()
+RAW = DATA_DIR / "raw"
 USER_AGENT = "zim-prospect/0.1 (open-data mineral prospectivity research)"
 TIMEOUT = 120
 
@@ -34,7 +48,15 @@ MRDS_CSV_ZIP = "https://mrdata.usgs.gov/mrds/mrds-csv.zip"
 OVERPASS = "https://overpass-api.de/api/interpreter"
 COP90_URL = ("https://copernicus-dem-90m.s3.amazonaws.com/Copernicus_DSM_COG_30_{ns}{lat:02d}_00_"
              "{ew}{lon:03d}_00_DEM/Copernicus_DSM_COG_30_{ns}{lat:02d}_00_{ew}{lon:03d}_00_DEM.tif")
+# Same layout with 1 arc-second tiles (verified with an HTTP HEAD on S18 E031, Nov 2026).
+COP30_URL = ("https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_{ns}{lat:02d}_00_"
+             "{ew}{lon:03d}_00_DEM/Copernicus_DSM_COG_10_{ns}{lat:02d}_00_{ew}{lon:03d}_00_DEM.tif")
+COP30_BELOW_RES_M = 200.0  # grids finer than this use GLO-30 tiles, coarser ones GLO-90
 EARTH_SEARCH = "https://earth-search.aws.element84.com/v1/search"
+S2_COLLECTION = "sentinel-2-l2a"
+STAC_PAGE_LIMIT = 200
+S2_DEFAULT_NODATA_PCT = 50.0  # assumed when an item lacks s2:nodata_pixel_percentage
+S2_CLOUD_PENALTY = 5.0        # one percent cloud costs as much as five percent empty pixels
 _ORBIT = re.compile(r"_R(\d{3})_")  # relative orbit inside s2:product_uri
 
 # USGS Africa map is age-only. Map its GLG codes to the classes the models use.
@@ -127,39 +149,91 @@ out center tags;"""
     return json.loads(path.read_text())
 
 
+def _dem_tile_urls(template: str, west: int, south: int, east: int, north: int) -> list[str]:
+    """1x1 degree tile URLs covering integer-degree bounds (tile named by its south-west corner)."""
+    return [template.format(ns="S" if lat < 0 else "N", lat=abs(lat), ew="W" if lon < 0 else "E", lon=abs(lon))
+            for lat in range(south, north) for lon in range(west, east)]
+
+
 def cop90_tile_urls(west: int, south: int, east: int, north: int) -> list[str]:
     """Copernicus GLO-90 tile URLs covering integer-degree bounds (tile named by its south edge)."""
-    urls = []
-    for lat in range(south, north):
-        for lon in range(west, east):
-            urls.append(COP90_URL.format(ns="S" if lat < 0 else "N", lat=abs(lat),
-                                         ew="W" if lon < 0 else "E", lon=abs(lon)))
-    return urls
+    return _dem_tile_urls(COP90_URL, west, south, east, north)
 
 
-def s2_scenes(bbox: tuple[float, float, float, float], start: str, end: str,
-              max_cloud: float = 5.0, per_tile: int = 2) -> list[dict]:
-    """Best `per_tile` Sentinel-2 L2A scenes per MGRS tile and orbit, ranked by empty pixels + cloud."""
-    by_tile: dict[str, list[dict]] = {}
-    body = {"collections": ["sentinel-2-l2a"], "bbox": list(bbox),
-            "datetime": f"{start}T00:00:00Z/{end}T23:59:59Z",
-            "query": {"eo:cloud_cover": {"lt": max_cloud}}, "limit": 200}
+def cop_dem_urls(west: float, south: float, east: float, north: float, res_m: float) -> list[str]:
+    """Copernicus DEM tiles intersecting lon/lat bounds: GLO-30 when res_m < 200 m, else GLO-90."""
+    if not (west < east and south < north):
+        raise ValueError(f"invalid lon/lat bounds: {(west, south, east, north)}")
+    if res_m <= 0:
+        raise ValueError("res_m must be positive")
+    template = COP30_URL if res_m < COP30_BELOW_RES_M else COP90_URL
+    return _dem_tile_urls(template, math.floor(west), math.floor(south), math.ceil(east), math.ceil(north))
+
+
+# ---------- Sentinel-2 scene search and selection ----------
+
+def _valid_item(feat: object) -> bool:
+    return (isinstance(feat, dict) and isinstance(feat.get("id"), str)
+            and isinstance(feat.get("properties"), dict) and "eo:cloud_cover" in feat["properties"])
+
+
+def s2_search(bbox: Sequence[float], start: str, end: str, max_cloud: float = 5.0) -> list[dict]:
+    """All Sentinel-2 L2A items over `bbox` between `start` and `end` (ISO dates) below `max_cloud`%."""
+    body: dict = {"collections": [S2_COLLECTION], "bbox": list(bbox),
+                  "datetime": f"{start}T00:00:00Z/{end}T23:59:59Z",
+                  "query": {"eo:cloud_cover": {"lt": max_cloud}}, "limit": STAC_PAGE_LIMIT}
+    items: list[dict] = []
     url: str | None = EARTH_SEARCH
     while url:
         resp = requests.post(url, json=body, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
         resp.raise_for_status()
         page = resp.json()
-        for feat in page["features"]:
-            props = feat["properties"]
-            tile = props.get("grid:code") or props.get("s2:mgrs_tile") or feat["id"]
-            # Group by orbit too: swath-edge tiles need scenes from both neighbouring orbits.
-            orbit = _ORBIT.search(str(props.get("s2:product_uri", "")))
-            by_tile.setdefault(f"{tile}/{orbit.group(1) if orbit else ''}", []).append(feat)
+        if not isinstance(page, dict) or not isinstance(page.get("features"), list):
+            raise ValueError(f"unexpected STAC response from {url}: no 'features' list")
+        good = [f for f in page["features"] if _valid_item(f)]
+        if len(good) < len(page["features"]):
+            log.warning("dropped %d malformed STAC items", len(page["features"]) - len(good))
+        items.extend(good)
         nxt = next((ln for ln in page.get("links", []) if ln.get("rel") == "next"), None)
         url, body = (nxt["href"], nxt.get("body", body)) if nxt else (None, body)
+    return items
 
-    def badness(feat: dict) -> float:
-        props = feat["properties"]
-        return float(props.get("s2:nodata_pixel_percentage", 50)) + 5 * float(props["eo:cloud_cover"])
 
-    return [f for feats in by_tile.values() for f in sorted(feats, key=badness)[:per_tile]]
+def s2_group_key(feat: dict) -> str:
+    """MGRS tile + relative orbit: swath-edge tiles need scenes from both neighbouring orbits."""
+    props = feat["properties"]
+    tile = props.get("grid:code") or props.get("s2:mgrs_tile") or feat["id"]
+    orbit = _ORBIT.search(str(props.get("s2:product_uri", "")))
+    return f"{tile}/{orbit.group(1) if orbit else ''}"
+
+
+def s2_badness(feat: dict) -> float:
+    """Ranking score (lower is better): percent empty pixels + 5 x percent cloud."""
+    props = feat["properties"]
+    nodata = float(props.get("s2:nodata_pixel_percentage", S2_DEFAULT_NODATA_PCT))
+    return nodata + S2_CLOUD_PENALTY * float(props["eo:cloud_cover"])
+
+
+def select_best(feats: Iterable[dict], per_tile: int) -> list[dict]:
+    """Best `per_tile` items per MGRS tile and orbit (duplicates by id dropped, first kept)."""
+    by_group: dict[str, list[dict]] = {}
+    seen: set[str] = set()
+    for feat in feats:
+        if feat["id"] in seen:
+            continue
+        seen.add(feat["id"])
+        by_group.setdefault(s2_group_key(feat), []).append(feat)
+    return [f for group in by_group.values() for f in sorted(group, key=s2_badness)[:per_tile]]
+
+
+def s2_scenes(bbox: tuple[float, float, float, float], start: str, end: str,
+              max_cloud: float = 5.0, per_tile: int = 2) -> list[dict]:
+    """Best `per_tile` Sentinel-2 L2A scenes per MGRS tile and orbit, ranked by empty pixels + cloud."""
+    return select_best(s2_search(bbox, start, end, max_cloud), per_tile)
+
+
+def s2_scenes_multi(bbox: tuple[float, float, float, float], seasons: Sequence[tuple[str, str]],
+                    max_cloud: float = 5.0, per_tile: int = 2) -> list[dict]:
+    """Like `s2_scenes`, but pools the candidates of several date windows before ranking."""
+    pooled = [feat for start, end in seasons for feat in s2_search(bbox, start, end, max_cloud)]
+    return select_best(pooled, per_tile)
