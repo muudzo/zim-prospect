@@ -39,9 +39,13 @@ COG overviews instead of full scenes, so nothing large is stored on disk.
 | `zoom/<commodity>/tNN/` | Per target: `indices.tif` (all indices), `score.tif`, `rgb.png`, `score.png`, `anomalies.csv` |
 | `tuning_report.json` | Prior and tuned fuzzy weights, both scored on held-out spatial folds (from `tune`) |
 
-**The interactive map.** Pick one mineral at a time. The panel shows how well that map ranked known deposits
-(a confidence badge), a legend, and the ranked targets: tap one to fly to it, copy its coordinates or get
-directions. On a phone the panel is a bottom sheet you can drag. The selected mineral is kept in the URL (`#gold`).
+**The interactive map.** Choose a mineral from the dropdown. Zimbabwe's boundary stays visible over the map;
+the **Zimbabwe** button restores the national view and **Fit targets** frames the current targets. Filter targets
+by greenfield/known district or sort by zone size, mean rank and distance to recorded sites. Tick up to three
+targets and open **Compare** for a side-by-side comparison, then jump to an individual target or frame the shortlist.
+Click a target to copy its coordinates or get directions. **Map & legend** holds the base map, overlay opacity
+and recorded-site controls. Validation metrics expand under the mineral description. On a phone, **View targets**
+opens the draggable bottom sheet and selecting a target returns to the map. The selected mineral stays in the URL (`#gold`).
 
 ## Adding your own data
 

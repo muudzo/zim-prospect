@@ -161,21 +161,27 @@ entries and, optionally, a `zoom` recipe. No code change is needed.
 
 ```
 webmap.py ──shapes──► ZP_DATA (JSON)  ─┐
-web/map.css (tokens, material panel)   ├─► one self-contained HTML file (folium/Leaflet scaffold)
+web/map.css (tokens, explorer panel)   ├─► one HTML file (folium/Leaflet scaffold)
 web/map.js  (panel, sheet, layers)    ─┘
 ```
 
 - **One page design for both maps.** The national map shows minerals with their targets; the zoom map
   shows targets with their anomalies. Both use the same `ZP_DATA` contract:
   `groups[] = {key, short, name, desc, badge, stats, image, bounds, points[], context[]}`.
-- **Layout.** Desktop gets a floating translucent panel. Phones (< 768 px) get a bottom sheet with 1:1 drag,
+- **Geographic context.** A simplified copy of the analysis boundary is embedded as GeoJSON, with a dark casing
+  and white outline above the heat overlay. Country bounds drive the national reset action.
+- **Layout.** Desktop gets an opaque dark explorer panel with a native mineral selector and Targets,
+  Compare and Map & legend tabs. The target list supports filtering, sorting and a per-mineral shortlist of up
+  to three zones. Numeric comparison values come from the target CSV fields; distances describe the zone.
+  Phones (< 768 px) get a labelled bottom sheet with 1:1 drag,
   momentum projection and a critically damped spring that starts from the live position, so it can be
   interrupted. Only one group shows at a time, and the heat layer cross-fades on switch.
 - **Security.** All text from open data (OSM names, MRDS fields) is inserted with `textContent`, never
   `innerHTML`. The JSON payload escapes `</` and U+2028/2029. External links use `rel="noopener noreferrer"`.
-- **Accessibility.** Chips form a `radiogroup` with arrow-key support, and list rows are buttons with full labels.
+- **Accessibility.** Mineral selection uses a native select, tabs have arrow-key support, and list rows are buttons with full labels.
+  Comparison checkboxes have target-specific labels, and comparison tables have row and column headers.
   Changes are announced through an `aria-live` region. Touch targets are 44 px, focus is visible, and the page respects
-  `prefers-reduced-motion`, `prefers-reduced-transparency` and `prefers-contrast`.
+  `prefers-reduced-motion` and `prefers-contrast`. The panel uses an opaque surface.
 
 ---
 

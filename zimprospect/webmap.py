@@ -22,7 +22,8 @@ import rasterio
 from branca.element import Element
 from rasterio.warp import Resampling, calculate_default_transform, reproject
 
-from .grid import Grid
+from . import sources
+from .grid import Grid, ZIM_CRS
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -36,8 +37,7 @@ ZOOM_VISIBLE, ZOOM_TOP = 1.0, 3.0  # show anomaly strength 1..3 in zoom maps
 CONFIDENCE_STRONG, CONFIDENCE_MODERATE, MIN_SITES = 0.80, 0.70, 10
 CONTAINS_KNOWN_KM = 0.5
 NATIONAL_TEXT = {
-    "title": "Zimbabwe mineral prospectivity",
-    "subtitle": "Open-data screening map · 500 m cells",
+    "title": "zim-prospect",
     "groupLabel": "Mineral", "pointLabel": "Targets", "emptyText": "No targets for this mineral.",
     "disclaimer": ("Screening tool built from open data. A target is a place to investigate, not a proven "
                    "deposit. Check prospecting licences, land access and protected areas before any field work."),
@@ -103,6 +103,15 @@ def write_page(path: Path, data: Mapping) -> None:
 
 # ---------- national map ----------
 
+def geography(boundary: gpd.GeoDataFrame) -> dict:
+    """Embed a simplified national outline, with no source attributes or remote fetch in the viewer."""
+    border = boundary[["geometry"]].to_crs(ZIM_CRS)
+    border = border.set_geometry(border.geometry.simplify(250, preserve_topology=True)).to_crs(4326)
+    west, south, east, north = border.total_bounds
+    return {"country": json.loads(border.to_json(drop_id=True)),
+            "countryBounds": [[float(south), float(west)], [float(north), float(east)]]}
+
+
 def split_label(label: str) -> tuple[str, str]:
     """'Gold (orogenic, greenstone-hosted)' -> ('Gold', 'Orogenic, greenstone-hosted')."""
     name, _, rest = label.partition(" (")
@@ -139,17 +148,21 @@ def target_points(df: pd.DataFrame) -> list[dict]:
         if dist is None:
             dist_text = "no known site recorded"
         elif dist < CONTAINS_KNOWN_KM:
-            dist_text = "contains a known site"
+            dist_text = "zone contains a recorded site"
         else:
-            dist_text = f"{dist:.1f} km from nearest known site"
+            dist_text = f"{dist:.1f} km from zone to recorded site"
         top = max(100 * (1 - float(row.peak_score)), 0.1)
+        mean_rank = _num(100 * row.mean_score, 2)
+        mean_text = "–" if mean_rank is None else f"{mean_rank:.2f}"
         points.append({
             "rank": int(row.rank), "lat": float(row.peak_lat), "lon": float(row.peak_lon),
             "tone": "known" if known else "greenfield",
+            "metrics": {"areaKm2": _num(row.area_km2, 1), "meanRank": mean_rank,
+                        "zoneDistanceKm": dist},
             "title": f"{'Known district' if known else 'Greenfield'} · {row.area_km2:,.0f} km²",
-            "sub": f"Top {top:.1f}% · {dist_text}",
+            "sub": f"Mean rank {mean_text}/100 · {dist_text}",
             "lines": [f"Peak score in the top {top:.1f}% of Zimbabwe", f"Zone area {row.area_km2:,.0f} km²",
-                      dist_text[:1].upper() + dist_text[1:]],
+                      f"Zone mean rank {mean_text}/100", dist_text[:1].upper() + dist_text[1:]],
         })
     return points
 
@@ -166,7 +179,8 @@ def context_points(gdf: gpd.GeoDataFrame | None) -> list[list]:
 
 def national_map(path: Path, maps: Mapping[str, np.ndarray], labels: Mapping[str, str], grid: Grid,
                  occurrences: gpd.GeoDataFrame, targets: Mapping[str, pd.DataFrame],
-                 validation: Mapping[str, Mapping], known: Mapping[str, gpd.GeoDataFrame]) -> None:
+                 validation: Mapping[str, Mapping], known: Mapping[str, gpd.GeoDataFrame],
+                 boundary: gpd.GeoDataFrame | None = None) -> None:
     groups = []
     for key, arr in maps.items():
         name, desc = split_label(labels[key])
@@ -175,12 +189,14 @@ def national_map(path: Path, maps: Mapping[str, np.ndarray], labels: Mapping[str
         groups.append({"key": key, "short": name, "name": name, "desc": desc, "badge": badge, "stats": stats,
                        "image": image, "bounds": bounds, "points": target_points(targets.get(key, pd.DataFrame())),
                        "context": context_points(known.get(key))})
-    data = {**NATIONAL_TEXT, "fitOnSelect": False, "focusZoom": 10, "focusRadiusM": 6000,
-            "initialBounds": ZIM_BOUNDS, "groups": groups, "allContext": context_points(occurrences),
+    geo = geography(boundary if boundary is not None else sources.boundary())
+    data = {**NATIONAL_TEXT, **geo, "subtitle": f"Zimbabwe · {grid.res_m:g} m screening map",
+            "fitOnSelect": False, "focusZoom": 10, "focusRadiusM": 6000,
+            "initialBounds": geo["countryBounds"], "groups": groups, "allContext": context_points(occurrences),
             "legend": {"title": "Prospectivity", "gradient": ramp_css(NATIONAL_VISIBLE, 1.0),
                        "lo": "Top 40% of Zimbabwe", "hi": "Top 1%",
-                       "keys": [{"tone": "greenfield", "label": "Target over 5 km from any known site"},
-                                {"tone": "known", "label": "Target in a known mining district"},
+                       "keys": [{"tone": "greenfield", "label": "Zone over 5 km from a recorded site"},
+                                {"tone": "known", "label": "Zone near a recorded site"},
                                 {"tone": "context", "label": "Known mine or quarry (USGS MRDS, OpenStreetMap)"}]}}
     write_page(path, data)
 
@@ -211,7 +227,7 @@ def zoom_map(path: Path, label: str, results: Sequence, disclaimer: str) -> None
                                      ["Images used", str(res.n_scenes)]],
             "image": image, "bounds": bounds, "points": anomaly_points(res.anomalies, box_km),
             "context": [[round(res.lat, 5), round(res.lon, 5), f"Peak of national target #{res.rank}"]]})
-    data = {"title": f"{name}: target zoom", "subtitle": "10–20 m surface anomalies inside the top targets",
+    data = {**geography(sources.boundary()), "title": f"{name}: target zoom", "subtitle": "Surface anomalies · target-scale view",
             "groupLabel": "Target", "pointLabel": "Anomalies to check",
             "emptyText": "No patch stands out from its surroundings here.", "disclaimer": disclaimer,
             "popupNote": "Check on the ground and sample; this is not a deposit.", "fitOnSelect": True,
